@@ -1,228 +1,325 @@
-import pygame
-import math
-import os
 from pygame.locals import *
-from sys import exit
-from data import DATA
+import pygame
 from data import list_len
+from data import DATA
+from numba import jit
+from sys import exit
 from data import Bc
-from data import BHz
-from math import pi
+import numpy as np
+import pygame
+import os
 
 
-print("准备输出")                                                                                                   # 设置
-WINDOW_W = 1080
-WINDOW_H = 680
-one_time = 1  # 点/帧
-scale = 1  # 固定视角初始缩放
-scale_Vt = 8  # 跟踪视角初始缩放
-scale_ex = 1.1  # 缩放系数
-FPS = 30  # 帧率
-Vt = 0  # 初始是否视角跟踪
-start_xy_Vton = (WINDOW_W // 2 - 0, WINDOW_H // 2 - 0)  # 跟踪视角尾向量的位置
-start_xy_Vtoff = (WINDOW_W // 2 - 0, WINDOW_H // 2 - 0)  # 固定视角第首向量的位置
-cir_count = 80000  # 向量数
-bg_cor = (8, 8, 8)  # 背景色
-b_color = (166, 166, 225)  # 向量的默认颜色(半径)
-b_length = list_len * 0.985  # 轨迹持续帧数
-fourier_list = DATA[:]  # 导入数据
+print("准备输出")
+# 运行首选项（根据需求调参数，可以默认）
+FPS = 120  # 帧率
+WINDOW_W = 1080 * 2  # 窗口宽
+WINDOW_H = 720 * 2  # 窗口高
+cir_count = 80000  # 最小向量数
+bg_cor = (10, 20, 30)  # 背景色
+b_color = (188, 188, 244)  # 向量的默认颜色(半径)
+b_length = list_len * 0.995  # 轨迹持续的帧数
+Vt = False  # 初始摄像机跟踪
+Perspective = False  # 透视投影
+scale_ex = 1.018  # 缩放倍率系数
+z_change = .13 * list_len / (WINDOW_W + WINDOW_H)  # 深度缩放
+window_center = (WINDOW_W / 2 - 0, WINDOW_H / 2 - 0)  # 摄像机中心
+Move_k = 20  # 平移系数
+one_time = 1  # 运行速度（点/帧）
+nomat = True  # 不使用矩阵渲染,仅预览(极大加快运行速度)
+# 导入数据
+fourier_list = DATA[:]
 fourier_list = sorted(fourier_list, key=lambda x: abs(x[0]), reverse=True)  # 排序
-pygame.init()  # 初始化
+# 初始化
+pygame.init()
 pygame.mixer.init()
 os.environ['SDL_VIDEO_WINDOW_POS'] = "%d,%d" % (10, 70)
 screen = pygame.display.set_mode((WINDOW_W, WINDOW_H), pygame.DOUBLEBUF, 32)  # 创建窗口
-pygame.display.set_caption("傅里叶级数绘图")
+pygame.display.set_caption("傅里叶级数3D实时动画")
 font = pygame.font.SysFont('simhei', 16)
-k = len(fourier_list) / min(cir_count, len(fourier_list))  # 纠错系数
-Move_x = 0  # 平移
-Move_y = 0
-Move_k = 20  # 平移系数
-Vt_cir_0 = 0  # 以第几个节点为跟踪视角的中心,默认则为0
-if Vt_cir_0 == 0:
-    Vt_cir_0 = cir_count
+# 声明
+len_fourier_list = len(fourier_list)
+z = 0  # 声明向量深度
+ang_change = 0.02  # 声明角速度(弧度制)
+transform_matrix_now = np.array([[1, 0, 0, 0],
+                              [0, 1, 0, 0],
+                              [0, 0, 1, 0],
+                              [0, 0, 0, 1]])  # 声明当前变换矩阵
+a = np.array([[1, 0, 0, - window_center[0]],
+            [0, 1, 0, - window_center[1]],
+            [0, 0, 1, 0],
+            [0, 0, 0, 1]])
+c = np.linalg.inv(a)
+
+transform_matrix_zl = np.array([[np.cos(-ang_change), -np.sin(-ang_change), 0, 0],
+                    [np.sin(-ang_change), np.cos(-ang_change), 0, 0],
+                    [0, 0, 1, 0],
+                    [0, 0, 0, 1]])  # 纯旋转矩阵
+transform_matrix_zl = np.dot(c,np.dot(transform_matrix_zl,a))  # 旋转矩阵
+transform_matrix_zr = np.array([[np.cos(ang_change), -np.sin(ang_change), 0, 0],
+                    [np.sin(ang_change), np.cos(ang_change), 0, 0],
+                    [0, 0, 1, 0],
+                    [0, 0, 0, 1]])  # 纯旋转矩阵
+transform_matrix_zr = np.dot(c,np.dot(transform_matrix_zr,a))
+transform_matrix_yl = np.array([[np.cos(ang_change), 0, -np.sin(ang_change), 0],
+            [0, 1, 0, 0],
+            [np.sin(ang_change), 0,  np.cos(ang_change), 0],
+            [0, 0, 0, 1]])  # 纯旋转矩阵
+transform_matrix_yl = np.dot(c,np.dot(transform_matrix_yl,a))  # 旋转矩阵
+transform_matrix_yr = np.array([[np.cos(-ang_change), 0, -np.sin(-ang_change), 0],
+            [0, 1, 0, 0],
+            [np.sin(-ang_change), 0,  np.cos(-ang_change), 0],
+            [0, 0, 0, 1]])  # 纯旋转矩阵
+transform_matrix_yr = np.dot(c,np.dot(transform_matrix_yr,a))  # 旋转矩阵
+transform_matrix_xl = np.array([[1, 0, 0, 0],
+            [0,np.cos(ang_change),  -np.sin(ang_change), 0],
+            [0, np.sin(ang_change),  np.cos(ang_change), 0],
+            [0, 0, 0, 1]])  # 纯旋转矩阵
+transform_matrix_xl = np.dot(c,np.dot(transform_matrix_xl,a))  # 旋转矩阵
+transform_matrix_xr = np.array([[1, 0, 0, 0],
+            [0,np.cos(-ang_change),  -np.sin(-ang_change), 0],
+            [0, np.sin(-ang_change),  np.cos(-ang_change), 0],
+            [0, 0, 0, 1]])  # 纯旋转矩阵
+transform_matrix_xr = np.dot(c,np.dot(transform_matrix_xr,a))  # 旋转矩阵
+transform_matrix_up = np.array([[1, 0, 0, 0],
+            [0, 1, 0,  -Move_k],
+            [0, 0, 1, 0],
+            [0, 0, 0, 1]])  # 平移矩阵
+transform_matrix_up = np.dot(c,np.dot(transform_matrix_up,a))  # 平移矩阵
+transform_matrix_down = np.array([[1, 0, 0, 0],
+            [0, 1, 0,  Move_k],
+            [0, 0, 1, 0],
+            [0, 0, 0, 1]])  # 平移矩阵
+transform_matrix_down = np.dot(c,np.dot(transform_matrix_down,a))  # 平移矩阵
+transform_matrix_left = np.array([[1, 0, 0, -Move_k],
+            [0, 1, 0, 0],
+            [0, 0, 1, 0],
+            [0, 0, 0, 1]])  # 平移矩阵
+transform_matrix_left = np.dot(c,np.dot(transform_matrix_left,a))  # 平移矩阵
+transform_matrix_right = np.array([[1, 0, 0, Move_k],
+            [0, 1, 0, 0],
+            [0, 0, 1, 0],
+            [0, 0, 0, 1]])  # 平移矩阵
+transform_matrix_right = np.dot(c,np.dot(transform_matrix_right,a))  # 平移矩阵
+mat_big = [[scale_ex, 0, 0, 0],
+[0, scale_ex, 0, 0],
+[0, 0, scale_ex, 0],
+[0, 0, 0, 1]]
+mat_big = np.dot(c,np.dot(mat_big,a))  # 放大矩阵
+mat_small = [[1 / scale_ex, 0, 0, 0],
+[0, 1 / scale_ex, 0, 0],
+[0, 0, 1 / scale_ex, 0],
+[0, 0, 0, 1]]
+mat_small = np.dot(c,np.dot(mat_small,a))  # 缩小矩阵
+fovy = 150  # 视野
+aspect = WINDOW_W / WINDOW_H  # 屏幕宽高比
+Znear = 10
+Zfar = 100
+Perspective_matrix = np.array([[Zfar, 0, 0, 0],
+                              [0, Zfar, 0, 0],
+                              [0, 0, 1, 0],
+                              [0, 0, 1, 0]])  # 声明透视矩阵
+Perspective_matrix = np.dot(c,np.dot(Perspective_matrix,a))
 print("轨迹保留", b_length, "帧(自动)")
-print("使用了", min(cir_count, len(fourier_list)), "个向量")
-print("最大精度需要", len(fourier_list), "个向量")
-print("步长:", Bc, "像素/步")
-
-
-class Circle:                                                                                                  # 创建向量
+print("步长", Bc, "像素")
+print("向量数", len_fourier_list)
+print("达到最大精度需要", len(fourier_list), "个向量")
+father_x = WINDOW_W // 2 - 0
+father_y = WINDOW_H // 2 - 0
+@jit(nopython = True)
+def anglecos(a,r,c):
+    return a + r * np.cos(c)
+@jit(nopython = True)
+def anglesin(a,r,c):
+    return a + r * np.sin(c)
+@jit(nopython = True)
+def func_add(a,b,c):
+    return a + b * c
+class Circle:
     x, y = 0, 0
     r = 0
     angle = 0
-    angle_v = 0
+    angle_v = 1
     color = (0, 0, 0)
     father = None
-
     def __init__(self, r, angle_v, angle, color=None, father=None):
         self.r = r
         self.angle_v = angle_v
         self.angle = angle
         self.father = father
-        if color is None:
-            self.color = (0, 0, 0)
-        else:
-            self.color = color
-
-    def set_xy(self, xy):
-        self.x, self.y = xy
-
-    def set_xy_by_angle(self):
-        if Vt:
-            self.x = self.father.x + self.r * math.cos(self.angle) * scale_Vt
-            self.y = self.father.y + self.r * math.sin(self.angle) * scale_Vt
-        else:
-            self.x = self.father.x + self.r * math.cos(self.angle) * scale
-            self.y = self.father.y + self.r * math.sin(self.angle) * scale
-
-    def run(self, step_time):
-        if self.father is not None:
-            self.angle += self.angle_v * step_time
-            self.set_xy_by_angle()
-
-    def draw(self, draw_screen, draw_i):
-        if self.father is not None:
-            if Vt:
-                pygame.draw.aaline(draw_screen, (((draw_i / min(cir_count, len(fourier_list))) ** 1.8) * 255,
-                                                 ((draw_i / min(cir_count, len(fourier_list))) ** 3) * 255,
-                                                 ((draw_i / min(cir_count, len(fourier_list))) ** 1) * 255), (self.father.x - L_x + start_xy_Vton[0], self.father.y - L_y + start_xy_Vton[1]), (self.x - L_x + start_xy_Vton[0], self.y - L_y + start_xy_Vton[1]), 2)  # 绘制半径
-            else:
-                Vtoff_RGB = (((draw_i / min(cir_count, len(fourier_list))) ** 0.25) * 255,
-                             ((draw_i / min(cir_count, len(fourier_list))) ** 0.25) * 255,
-                             ((draw_i / min(cir_count, len(fourier_list))) ** 0.25) * 255)
-                pygame.draw.circle(draw_screen, Vtoff_RGB, (self.father.x + Move_x, self.father.y + Move_y), float(abs(self.r) * scale), 1)  # 圆轮廓线宽度
-                pygame.draw.aaline(draw_screen, Vtoff_RGB, (self.father.x + Move_x, self.father.y + Move_y), (self.x + Move_x, self.y + Move_y), 1)  # 绘制半径
-
-
-class Boxin:
-    xys = []
-
-    def add_point(self, xy):
-        self.xys.append(xy)
-        if len(self.xys) > b_length:
-            self.xys.pop(0)
-
-    def draw(self, draw_screen):
-        bl = len(self.xys)
-        if Vt:
-            for ii in range(bl - 1):  # 着色点颜色，线宽
-                if ((self.xys[ii][0] - self.xys[ii + 1][0]) ** 2 + (
-                        self.xys[ii][1] - self.xys[ii + 1][1]) ** 2) ** 0.5 < Bc * 4 * scale_Vt * k:  # 路径优化
-                    pygame.draw.aaline(draw_screen, (250, 250, 250), (Boxin.xys[ii - 0][0] - L_x + start_xy_Vton[0], Boxin.xys[ii - 0][1] - L_y + start_xy_Vton[1]), (self.xys[ii + 1][0] - L_x + start_xy_Vton[0], self.xys[ii + 1][1] - L_y + start_xy_Vton[1]), 2)  # 抗锯齿直线
-        else:
-            for ii in range(bl - 1):  # 着色点颜色，线宽
-                if ((self.xys[ii][0] - self.xys[ii + 1][0]) ** 2 + (
-                        self.xys[ii][1] - self.xys[ii + 1][1]) ** 2) ** 0.5 < Bc * 4 * scale * k:  # 路径优化
-                    pygame.draw.aaline(draw_screen, (250, 250, 250), (self.xys[ii][0] + Move_x, self.xys[ii][1] + Move_y), (self.xys[ii + 1][0] + Move_x, self.xys[ii + 1][1] + Move_y), 2)  # 抗锯齿直线
-
-
+        self.color = color
+xys = []
 super_circle = Circle(0, 0, 0, color=b_color)
-if Vt:
-    super_circle.set_xy(start_xy_Vton)
-else:
-    super_circle.set_xy(start_xy_Vtoff)
-circle_list = [super_circle]
-for i in range(min(cir_count, len(fourier_list))):
+super_circle.x, super_circle.y = window_center
+circle_list = [super_circle] 
+for i in range(len_fourier_list):
     p = fourier_list[i]
     circle_list.append(Circle(p[0], p[1], p[2], color=b_color, father=circle_list[i]))
-bx = Boxin()
 clock = pygame.time.Clock()
-print("正在运行")
-
-
-while 1:                                                                                                           # 输出
+len_xys = 0
+xys0_translated = []
+xys1_translated = []
+while True: 
     for event in pygame.event.get():
         if event.type == pygame.QUIT:  # 按下退出按钮
-            print("结束运行")
+            print("结束")
             exit()
         elif event.type == KEYDOWN:  # 键盘按下
             if event.key == K_ESCAPE:  # ESC
-                print("结束运行")
+                print("结束")
                 exit()
             elif event.key == K_SPACE:  # 按下空格
-                start_xy_Vton = (WINDOW_W / 2, WINDOW_H / 2)
+                transform_matrix_now = np.array([[1, 0, 0, 0],
+                              [0, 1, 0, 0],
+                              [0, 0, 1, 0],
+                              [0, 0, 0, 1]])
             elif event.key == K_BACKSPACE:
-                Boxin.xys.clear()  # 清空屏幕
-            elif event.key == K_v:  # 跟踪视角与固定视角转换
+                xys.clear()
+                xys = [list(window_center)]  # 清空屏幕
+            elif event.key == K_v:  # 跟踪视角与固定视角坐标转换
                 Vt = not Vt
-                if Vt:
-                    for i in range(len(Boxin.xys)):
-                        Boxin.xys[i] = [((Boxin.xys[i][0] - start_xy_Vton[0]) / scale) * scale_Vt + start_xy_Vton[0],
-                                        ((Boxin.xys[i][1] - start_xy_Vton[1]) / scale) * scale_Vt + start_xy_Vton[1]]
-                else:
-                    for i in range(len(Boxin.xys)):
-                        Boxin.xys[i] = [((Boxin.xys[i][0] - start_xy_Vtoff[0]) / scale_Vt) * scale + start_xy_Vtoff[0],
-                                        ((Boxin.xys[i][1] - start_xy_Vtoff[1]) / scale_Vt) * scale + start_xy_Vtoff[1]]
-            elif event.key == K_TAB:  # 按下TAB键
+            elif event.key == K_TAB:  # 反向
                 one_time *= -1
+            elif event.key == K_n:  # 预览模式(禁用矩阵)
+                nomat = not nomat
+            elif event.key == K_r:  # 右侧视图(侧视)
+                b = np.array([[np.cos(-np.pi / 2), 0, -np.sin(-np.pi / 2), 0],
+                            [0, 1, 0, 0],
+                            [np.sin(-np.pi / 2), 0,  np.cos(-np.pi / 2), 0],
+                            [0, 0, 0, 1]])  # 纯旋转矩阵
+                transform_matrix_now = np.dot(c,np.dot(b,a))  # 旋转矩阵
+            elif event.key == K_t:  # 顶视图(俯视)
+                b = np.array([[1, 0, 0, 0],
+                            [0,np.cos(-np.pi / 2),  -np.sin(-np.pi / 2), 0],
+                            [0, np.sin(-np.pi / 2),  np.cos(-np.pi / 2), 0],
+                            [0, 0, 0, 1]])  # 纯旋转矩阵
+                transform_matrix_now = np.dot(c,np.dot(b,a))  # 旋转矩阵
+            elif event.key == K_f:  # 正视图(正视)
+                transform_matrix_now = np.array([[1, 0, 0, 0],
+                            [0, 1, 0, 0],
+                            [0, 0, 1, 0],
+                            [0, 0, 0, 1]])  # 旋转矩阵
+            elif pygame.key.get_pressed()[pygame.K_g]:  # 透视|平行投影转换
+                Perspective = not Perspective
     if pygame.key.get_pressed():
-        if pygame.key.get_pressed()[pygame.K_PLUS] or pygame.key.get_pressed()[pygame.K_EQUALS]:  # 是否按下+或=
-            if Vt:
-                scale_Vt *= scale_ex
-                for i in range(len(Boxin.xys)):
-                    Boxin.xys[i] = [(Boxin.xys[i][0] - start_xy_Vton[0]) * scale_ex + start_xy_Vton[0],
-                                    (Boxin.xys[i][1] - start_xy_Vton[1]) * scale_ex + start_xy_Vton[1]]
-            else:
-                scale *= scale_ex
-                for i in range(len(Boxin.xys)):  # 放大/缩小
-                    Boxin.xys[i] = [(Boxin.xys[i][0] - start_xy_Vtoff[0]) * scale_ex + start_xy_Vtoff[0],
-                                    (Boxin.xys[i][1] - start_xy_Vtoff[1]) * scale_ex + start_xy_Vtoff[1]]  # 坐标变换
-        elif pygame.key.get_pressed()[pygame.K_MINUS] and scale_Vt > 0.1:
-            if Vt:
-                scale_Vt /= scale_ex
-                for i in range(len(Boxin.xys)):
-                    Boxin.xys[i] = [(Boxin.xys[i][0] - start_xy_Vton[0]) / scale_ex + start_xy_Vton[0],
-                                    (Boxin.xys[i][1] - start_xy_Vton[1]) / scale_ex + start_xy_Vton[1]]
-            else:
-                scale /= scale_ex
-                for i in range(len(Boxin.xys)):
-                    Boxin.xys[i] = [(Boxin.xys[i][0] - start_xy_Vtoff[0]) / scale_ex + start_xy_Vtoff[0],
-                                    (Boxin.xys[i][1] - start_xy_Vtoff[1]) / scale_ex + start_xy_Vtoff[1]]
-        elif pygame.key.get_pressed()[pygame.K_UP] and start_xy_Vton[1] > WINDOW_H * 0.01:
-            if Vt:
-                dt_l = ((start_xy_Vton[0] - WINDOW_W * 0.01) / WINDOW_W) / scale
-                dt_r = ((WINDOW_W * 0.99 - start_xy_Vton[0]) / WINDOW_W) / scale
-                dt_u = ((start_xy_Vton[1] - WINDOW_H * 0.01) / WINDOW_H) / scale
-                dt_d = ((WINDOW_H * 0.99 - start_xy_Vton[1]) / WINDOW_H) / scale
-                start_xy_Vton = (start_xy_Vton[0], start_xy_Vton[1] - (Move_k * (dt_u * 0.5)))
-            else:
-                Move_y -= Move_k * scale ** 0.5
-        elif pygame.key.get_pressed()[pygame.K_DOWN] and start_xy_Vton[1] < WINDOW_H * 0.99:
-            if Vt:
-                dt_l = ((start_xy_Vton[0] - WINDOW_W * 0.01) / WINDOW_W) / scale
-                dt_r = ((WINDOW_W * 0.99 - start_xy_Vton[0]) / WINDOW_W) / scale
-                dt_u = ((start_xy_Vton[1] - WINDOW_H * 0.01) / WINDOW_H) / scale
-                dt_d = ((WINDOW_H * 0.99 - start_xy_Vton[1]) / WINDOW_H) / scale
-                start_xy_Vton = (start_xy_Vton[0], start_xy_Vton[1] + (Move_k * (dt_d * 0.5)))
-            else:
-                Move_y += Move_k * scale ** 0.5
-        elif pygame.key.get_pressed()[pygame.K_LEFT] and start_xy_Vton[0] > WINDOW_W * 0.01:
-            if Vt:
-                dt_l = ((start_xy_Vton[0] - WINDOW_W * 0.01) / WINDOW_W) / scale
-                dt_r = ((WINDOW_W * 0.99 - start_xy_Vton[0]) / WINDOW_W) / scale
-                dt_u = ((start_xy_Vton[1] - WINDOW_H * 0.01) / WINDOW_H) / scale
-                dt_d = ((WINDOW_H * 0.99 - start_xy_Vton[1]) / WINDOW_H) / scale
-                start_xy_Vton = (start_xy_Vton[0] - (Move_k * (dt_l * 0.5)), start_xy_Vton[1])
-            else:
-                Move_x -= Move_k * scale ** 0.5
-        elif pygame.key.get_pressed()[pygame.K_RIGHT] and start_xy_Vton[0] < WINDOW_W * 0.99:
-            if Vt:
-                dt_l = ((start_xy_Vton[0] - WINDOW_W * 0.01) / WINDOW_W) / scale
-                dt_r = ((WINDOW_W * 0.99 - start_xy_Vton[0]) / WINDOW_W) / scale
-                dt_u = ((start_xy_Vton[1] - WINDOW_H * 0.01) / WINDOW_H) / scale
-                dt_d = ((WINDOW_H * 0.99 - start_xy_Vton[1]) / WINDOW_H) / scale
-                start_xy_Vton = (start_xy_Vton[0] + (Move_k * (dt_r * 0.5)), start_xy_Vton[1])
-            else:
-                Move_x += Move_k * scale ** 0.5
-    last_circle = circle_list[min(cir_count, len(fourier_list)) - 1]  # 最后一个点
-    Vtlast_circle = circle_list[min(Vt_cir_0, len(fourier_list)) - 1]
+        if pygame.key.get_pressed()[pygame.K_PLUS] or pygame.key.get_pressed()[pygame.K_EQUALS]:  # 缩放
+            transform_matrix_now = np.dot(mat_big,transform_matrix_now)
+        if pygame.key.get_pressed()[pygame.K_MINUS]:
+            transform_matrix_now = np.dot(mat_small,transform_matrix_now)
+        if pygame.key.get_pressed()[pygame.K_UP]:    # 上下左右平移
+            transform_matrix_now = np.dot(transform_matrix_up,transform_matrix_now)
+        if pygame.key.get_pressed()[pygame.K_DOWN]:
+            transform_matrix_now = np.dot(transform_matrix_down,transform_matrix_now)
+        if pygame.key.get_pressed()[pygame.K_LEFT]:
+            transform_matrix_now = np.dot(transform_matrix_left,transform_matrix_now)
+        if pygame.key.get_pressed()[pygame.K_RIGHT]:
+            transform_matrix_now = np.dot(transform_matrix_right,transform_matrix_now)
+        if pygame.key.get_pressed()[pygame.K_q]:  # 顺时针旋转(绕z轴)
+            transform_matrix_now = np.dot(transform_matrix_zl,transform_matrix_now)
+        if pygame.key.get_pressed()[pygame.K_e]:  # 逆时针旋转(绕z轴)
+            transform_matrix_now = np.dot(transform_matrix_zr,transform_matrix_now)
+        if pygame.key.get_pressed()[pygame.K_a]:  # 左旋转(绕y轴)
+            transform_matrix_now = np.dot(transform_matrix_yl,transform_matrix_now)
+        if pygame.key.get_pressed()[pygame.K_d]:  # 右旋转(绕y轴)
+            transform_matrix_now = np.dot(transform_matrix_yr,transform_matrix_now)
+        if pygame.key.get_pressed()[pygame.K_w]:  # 上旋转(绕x轴)
+            transform_matrix_now = np.dot(transform_matrix_xl,transform_matrix_now)
+        if pygame.key.get_pressed()[pygame.K_s]:  # 下旋转(绕x轴)
+            transform_matrix_now = np.dot(transform_matrix_xr,transform_matrix_now)
+        if pygame.key.get_pressed()[pygame.K_u]:  # 
+            z_change *= 1.1
+        if pygame.key.get_pressed()[pygame.K_i]:  # 
+            z_change /= 1.1
     screen.fill(bg_cor)  # 画背景
-    for i, circle in enumerate(circle_list[:min(cir_count, len(fourier_list))]):  # 运行
-        circle.run(one_time)
-        circle.draw(screen, i)
-    bx.add_point((last_circle.x, last_circle.y))
-    bx.draw(screen)
+    for i in range(len_xys):
+        xys[i][2] = (len_xys - i) * z_change
+    Vtlast1_circle = circle_list[- 1]
+    last_circle = circle_list[len_fourier_list - 1]  # 最后一个对象
+    xys.append([last_circle.x, last_circle.y, z, 1])
+    if nomat:
+        if Vt:
+            for ii in range(1,len_xys):
+                pygame.draw.aaline(screen, (200,70,50), (xys[ii - 1][0] - xys[-1][0] + window_center[0], xys[ii - 1][1] - xys[-1][1] + window_center[1]),
+                                (xys[ii][0]- xys[-1][0] + window_center[0], xys[ii][1] - xys[-1][1] + window_center[1]), 1)
+        else:
+            for ii in range(1,len_xys):
+                pygame.draw.aaline(screen, (200,70,50), (xys[ii - 1][0], xys[ii - 1][1]),(xys[ii][0], xys[ii][1]), 1)
+    else:
+        len_xys = len(xys)
+        for ii in range(1,len_xys):  # 着色点颜色，线宽
+            xys_ii_0 = xys[ii - 1][0]  # 避免多次调用
+            xys_ii_1= xys[ii - 1][1]
+            xys_iinext_0 = xys[ii][0]
+            xys_iinext_1= xys[ii][1]
+            if ((xys_ii_0 - xys_iinext_0) ** 2 + (
+                    xys_ii_1 - xys_iinext_1) ** 2) ** 0.5 < Bc * 10:  # 路径优化 
+                rgb = min((ii / len_xys) * 5000, 255)
+                RGB = (rgb,rgb,rgb)
+                if Vt:
+                    xys0_translated = np.dot(last_M,[xys_ii_0 - xys[-1][0] + window_center[0],xys_ii_1 - xys[-1][1] + window_center[1],xys[ii - 1][2],1])
+                    xys1_translated = np.dot(last_M,[xys_iinext_0 - xys[-1][0] + window_center[0],xys_iinext_1 - xys[-1][1] + window_center[1],xys[ii][2],1])
+                else:
+                    xys0_translated = np.dot(last_M,xys[ii - 1])
+                    xys1_translated = np.dot(last_M,xys[ii])
+                pygame.draw.aaline(screen, RGB, (xys0_translated[0], xys0_translated[1]), (xys1_translated[0], xys1_translated[1]), 1)  # 抗锯齿直线
+    if Perspective:  # 透视
+        last_M = np.dot(Perspective_matrix,transform_matrix_now)
+    else:
+        last_M = transform_matrix_now
+    if len_xys >= b_length:
+        xys.pop(0)
+    len_xys = len(xys)
+    rline_list = []
+    for i, circle in enumerate(circle_list[:len_fourier_list]):  # 运行
+        circle_father = circle.father
+        if circle_father is not None:
+            r = circle.r
+            circle.angle = func_add(circle.angle, circle.angle_v,one_time)
+            selfangle = circle.angle
+            father_x = circle.father.x
+            father_y = circle.father.y
+            circle.x = anglecos(father_x, r, selfangle)
+            circle.y = anglesin(father_y, r, selfangle)
+            #rline_list.append([father_x, father_y,circle.x, circle.y])
+            rline_list.append([circle.x, circle.y])
+            if nomat and not Vt:
+                pygame.draw.circle(screen, (80,70,60), (father_x,father_y), float(abs(r)), 1)  # 圆轮廓线宽度
+            if i == len_fourier_list - 1:  # 末端点坐标
+                L1_x = circle.x
+                L1_y = circle.y
+        else:
+            rline_list.append([WINDOW_W / 2, WINDOW_H / 2])
+    if Vt:  # 末端点居中
+        for i in range(len(rline_list)):
+            rline_list[i][0] -= L1_x - window_center[0]
+            rline_list[i][1] -= L1_y - window_center[1]
+    if nomat:
+        pygame.draw.aalines(screen, (0,50,255), False, rline_list, blend=1)
+    else:
+        for i in range(len(rline_list)):
+            temp1 = [rline_list[i-1][0],rline_list[i-1][1],0,1]
+            temp1 = np.dot(last_M,temp1)
+            temp2 = [rline_list[i][0],rline_list[i][1],0,1]
+            temp2 = np.dot(last_M,temp2)
+            i_k = i / len(rline_list)
+            lineRGB = (50 + i_k ** 0.2 * 200,
+                            50 + i_k ** 0.3 * 200,
+                            50 + i_k ** 0.4 * 200)
+            pygame.draw.aaline(screen, lineRGB, (temp1[0],temp1[1]), (temp2[0],temp2[1]), 1)  # 绘制半径
+        X1 = [window_center[0] - 300,window_center[1],0,1]
+        X2 = [window_center[0] + 300,window_center[1],0,1]
+        Y1 = [window_center[0],window_center[1] - 300,0,1]
+        Y2 = [window_center[0],window_center[1] + 300,0,1]
+        Z1 = [window_center[0],window_center[1],-300,1]
+        Z2 = [window_center[0],window_center[1],300,1]
+        X1 = np.dot(last_M,X1)
+        Y1 = np.dot(last_M,Y1)
+        Z1 = np.dot(last_M,Z1)
+        X2 = np.dot(last_M,X2)
+        Y2 = np.dot(last_M,Y2)
+        Z2 = np.dot(last_M,Z2)
+        pygame.draw.aaline(screen, (180,90,90), (X1[0],X1[1]), (X2[0],X2[1]), 1)  # 绘制坐标轴
+        pygame.draw.aaline(screen, (90,180,90), (Y1[0],Y1[1]), (Y2[0],Y2[1]), 1)  # 绘制坐标轴
+        pygame.draw.aaline(screen, (90,90,180), (Z1[0],Z1[1]), (Z2[0],Z2[1]), 1)  # 绘制坐标轴
+    timer_passed = clock.tick(FPS)
     pygame.display.update()
-    L_x = Vtlast_circle.x
-    L_y = Vtlast_circle.y
-    time_passed = clock.tick(FPS)
